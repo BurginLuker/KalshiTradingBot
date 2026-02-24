@@ -7,6 +7,7 @@ export interface EdgeOpportunity {
     reason: string;
 }
 
+// Decimal value for what the edge needs to be, 0.03 would be 3%
 const MIN_EDGE_THRESHOLD = 0.025;
 
 class EventAnalysis {

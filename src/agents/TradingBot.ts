@@ -15,8 +15,9 @@ interface TrackedOpportunity {
     opportunityId: string | null;
 }
 
-interface CollectResult {
-    tracked: TrackedOpportunity[];
+interface AnalyzeResult {
+    opportunities: number;
+    executed: number;
     skipped: number;
 }
 
@@ -63,7 +64,6 @@ export class TradingBot {
         const { accountBalance: initialBalance, activePositions } = await KalshiAccount.getAccountBalance();
         Logger.log(`Account balance: $${initialBalance}`);
 
-        // I dont want to run the account to zero or risk overdrawing on kalshi, idk what happens
         if (initialBalance < this.MIN_BALANCE) {
             Logger.log(`Balance below $${this.MIN_BALANCE} minimum — stopping.`);
             return;
@@ -72,11 +72,8 @@ export class TradingBot {
         // Get the held event tickers to avoid double dipping in markets if the edge is found twice
         // NOTE: Logic could be written to resize positions
         const heldEventTickers: Set<string> = await this.getHeldEventTickers();
-       
-       // Get the odds api events matched with the kalshi event for analysis
-        const matched = await this.getMatchedEvents();
 
-        console.log(matched)
+        const matched = await this.getMatchedEvents();
 
         if (matched.length === 0) {
             Logger.log('No cached matches found — run discovery first (npm run discover).');
@@ -85,24 +82,11 @@ export class TradingBot {
 
         await this.startAuditRun(initialBalance, activePositions);
 
-        // Returns edge oppurtunities
-        const { tracked, skipped } = await this.collectOpportunities(matched,heldEventTickers);
-
-        if (tracked.length === 0) {
-            Logger.log('No qualifying opportunities found.');
-            await AuditLogger.completeRun({ matched: matched.length, opportunities: 0, executed: 0, skipped });
-            return;
-        }
-
-        Logger.log(`Found ${tracked.length} qualifying oppurtunities`);
-
-        // Place the orders on Kalshi, NOTE: Probably would be smart to refactor this
-        // Placing the orders at time of edge finding would be smarter, in case the market changes by the time we reach this code
-        const executed = await this.executeOpportunities(tracked);
+        const { opportunities, executed, skipped } = await this.analyzeAndExecute(matched, heldEventTickers);
 
         const { accountBalance: finalBalance, activePositions: finalPositions } = await KalshiAccount.getAccountBalance();
         await AuditLogger.logAccountSnapshot(finalBalance, finalPositions, 'run_end');
-        await AuditLogger.completeRun({ matched: matched.length, opportunities: tracked.length, executed, skipped });
+        await AuditLogger.completeRun({ matched: matched.length, opportunities, executed, skipped });
     }
 
     private async getMatchedEvents(): Promise<EventPair[]> {
@@ -122,7 +106,6 @@ export class TradingBot {
             .lte('events.commence_time', windowEnd.toISOString())
             .eq('events.sport_key', this.ODDS_API_SPORT_KEY);
 
-
         if (error) {
             throw new Error(`Failed to fetch cached matches: ${error.message}`);
         }
@@ -135,7 +118,7 @@ export class TradingBot {
     }
 
     private async getHeldEventTickers(): Promise<Set<string>> {
-        const {event_positions} = await KalshiAccount.getPositions();
+        const { event_positions } = await KalshiAccount.getPositions();
 
         const tickers = new Set<string>();
         for (const position of event_positions) {
@@ -176,22 +159,21 @@ export class TradingBot {
         return { kalshiEvent, oddsEvent };
     }
 
-    private async collectOpportunities(matched: EventPair[],heldEventTickers:Set<string>): Promise<CollectResult> {
-        const tracked: TrackedOpportunity[] = [];
+    private async analyzeAndExecute(matched: EventPair[], heldEventTickers: Set<string>): Promise<AnalyzeResult> {
+        let opportunities = 0;
+        let executed = 0;
         let skipped = 0;
 
         for (const { kalshiEvent, oddsEvent } of matched) {
-            
             // For events that we have already traded, there is no use in burning api calls
             // There is a caveat to this, if the edge has now spawned on the other side of the event we would not trade the event
             // But that is more logic, we would have to check we werent summing proabilities to over 100% if we were gonna risk playing both sides of the market
-            if(heldEventTickers.has(kalshiEvent.event_ticker)){
-                Logger.log(`Skipping ticker ${kalshiEvent.event_ticker} as a position is already held`)
+            if (heldEventTickers.has(kalshiEvent.event_ticker)) {
+                Logger.log(`Skipping ticker ${kalshiEvent.event_ticker} as a position is already held`);
 
                 // TODO: We could check positions for profit at some point? Unless that is bad idea bc it defeats kelly position sizing strategy
                 continue;
             }
-
 
             Logger.log(`Analyzing — "${kalshiEvent.title}" ↔ "${oddsEvent.away_team} at ${oddsEvent.home_team}"`);
             await this.sleep(this.LOOP_DELAY_MS);
@@ -215,7 +197,12 @@ export class TradingBot {
                         ? await AuditLogger.logEdgeOpportunity(matchId, opportunity)
                         : null;
 
-                    tracked.push({ opportunity, opportunityId });
+                    opportunities += 1;
+
+                    const placed = await this.executeOpportunity({ opportunity, opportunityId });
+                    if (placed) {
+                        executed += 1;
+                    }
                 }
             } catch (error) {
                 Logger.log(`Skipping event — analysis failed: ${error}`);
@@ -230,29 +217,25 @@ export class TradingBot {
 
         Logger.log(`Skipped: ${skipped} events`);
 
-        const sorted = tracked.sort((a, b) => b.opportunity.edge_event.edge - a.opportunity.edge_event.edge);
-        return { tracked: sorted, skipped };
+        return { opportunities, executed, skipped };
     }
 
-    private async executeOpportunities(tracked: TrackedOpportunity[]): Promise<number> {
-        let executed = 0;
+    private async executeOpportunity(tracked: TrackedOpportunity): Promise<boolean> {
+        const { opportunity, opportunityId } = tracked;
 
-        for (const { opportunity, opportunityId } of tracked) {
-            const { accountBalance, activePositions } = await KalshiAccount.getAccountBalance();
+        const { accountBalance, activePositions } = await KalshiAccount.getAccountBalance();
 
-            if (accountBalance < this.MIN_BALANCE) {
-                Logger.log(`Balance below $${this.MIN_BALANCE} minimum — stopping.`);
-                break;
-            }
-
-            await AuditLogger.logAccountSnapshot(accountBalance, activePositions, 'pre_order');
-
-            Logger.log(opportunity.reason);
-            await this.placeOrderForOpportunity(opportunity, opportunityId, accountBalance);
-            executed += 1;
+        if (accountBalance < this.MIN_BALANCE) {
+            Logger.log(`Balance below $${this.MIN_BALANCE} minimum — stopping.`);
+            return false;
         }
 
-        return executed;
+        AuditLogger.logAccountSnapshot(accountBalance, activePositions, 'pre_order');
+
+        Logger.log(opportunity.reason);
+        await this.placeOrderForOpportunity(opportunity, opportunityId, accountBalance);
+
+        return true;
     }
 
     private async placeOrderForOpportunity(
