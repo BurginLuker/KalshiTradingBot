@@ -13,6 +13,7 @@ class KalshiAccount {
     private YES_SIDE = 'yes';
     private BUY_ACTION = 'buy';
     private LIMIT_ORDER_TYPE = 'limit';
+    private RESTING_STATUS = 'resting';
 
     constructor() {
         this.apiKey = KALSHI_API_KEY;
@@ -63,6 +64,51 @@ class KalshiAccount {
         return {
             accountBalance: accountBalance / 100,
             activePositions: activePositions / 100,
+        };
+    }
+
+    async getActiveOrders(): Promise<any[]> {
+        const method = 'GET';
+        const pathWithQuery = `${this.ORDER_PATH}?status=${this.RESTING_STATUS}`;
+        const timestamp = this.getCurrentTimestamp();
+        const signature = this.createSignature(timestamp, method, pathWithQuery);
+
+        const url = `https://${this.baseUrl}${pathWithQuery}`;
+
+        const response = await fetch(url, {
+            method,
+            headers: {
+                'KALSHI-ACCESS-KEY': this.apiKey,
+                'KALSHI-ACCESS-SIGNATURE': signature,
+                'KALSHI-ACCESS-TIMESTAMP': timestamp,
+            },
+        });
+
+        const { orders }: any = await response.json();
+        return orders ?? [];
+    }
+
+    async getPositions(): Promise<any> {
+        const method = 'GET';
+        const positionsPath = '/trade-api/v2/portfolio/positions';
+        const timestamp = this.getCurrentTimestamp();
+        const signature = this.createSignature(timestamp, method, positionsPath);
+
+        const url = `https://${this.baseUrl}${positionsPath}`;
+
+        const response = await fetch(url, {
+            method,
+            headers: {
+                'KALSHI-ACCESS-KEY': this.apiKey,
+                'KALSHI-ACCESS-SIGNATURE': signature,
+                'KALSHI-ACCESS-TIMESTAMP': timestamp,
+            },
+        });
+
+        const { market_positions, event_positions }: any = await response.json();
+        return {
+            market_positions,
+            event_positions
         };
     }
 

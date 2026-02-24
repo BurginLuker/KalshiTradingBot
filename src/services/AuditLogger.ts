@@ -58,6 +58,7 @@ class AuditLogger {
             .eq('id', this.runId);
 
         if (error) Logger.log(`AuditLogger: failed to complete run — ${error.message}`);
+        this.runId = null;
     }
 
     async failRun(errorMessage: string): Promise<void> {
@@ -73,6 +74,7 @@ class AuditLogger {
             .eq('id', this.runId);
 
         if (error) Logger.log(`AuditLogger: failed to mark run as failed — ${error.message}`);
+        this.runId = null;
     }
 
     async logAccountSnapshot(balance: number, activePositions: number, reason: string): Promise<void> {

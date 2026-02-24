@@ -3,11 +3,12 @@
     "allow": [
       "WebFetch(domain:docs.kalshi.com)",
       "WebSearch",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "mcp__supabase__list_migrations"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

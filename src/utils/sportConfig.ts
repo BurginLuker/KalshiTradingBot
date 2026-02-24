@@ -15,5 +15,9 @@ export const SPORT_CONFIG: Record<string, SportConfig> = {
     'mls_soccer':{
         oddsApiKey:'soccer_usa_mls',
         kalshiSeries:'KXMLSGAME'
+    },
+    'american_hocky_league':{
+        oddsApiKey:'icehockey_ahl',
+        kalshiSeries:'KXAHLGAME'
     }
 };

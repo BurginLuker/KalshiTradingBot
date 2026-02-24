@@ -6,9 +6,13 @@ import SupabaseClient from '../clients/SupabaseClient';
 import Logger from './Logger';
 import type { KalshiEvent, OddsEventSummary, EventPair, MatchResult } from '../types';
 
-const MODEL = 'claude-haiku-4-5';
+const MODEL = 'claude-sonnet-4-6';
 const MAX_TOKENS = 4096;
-const DATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// Subtract US/Pacific offset before extracting calendar date so that a 7 PM ET
+// game (midnight UTC, next calendar day) maps back to the correct local date.
+// Pacific time is the westernmost US zone that hosts major sports events.
+const US_WEST_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 const TICKER_DATE_REGEX = /^(\d{2})([A-Z]{3})(\d{2})/;
 
@@ -55,13 +59,19 @@ function parseTickerDate(ticker: string): Date | null {
 }
 
 function getCommenceDate(commenceTime: string): Date {
-    const iso = new Date(commenceTime);
-    return new Date(Date.UTC(iso.getUTCFullYear(), iso.getUTCMonth(), iso.getUTCDate()));
+    const utc = new Date(commenceTime);
+    const local = new Date(utc.getTime() - US_WEST_OFFSET_MS);
+    return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()));
 }
 
-function isWithinDateWindow(tickerDate: Date, commenceDate: Date): boolean {
-    const diff = Math.abs(tickerDate.getTime() - commenceDate.getTime());
-    return diff <= DATE_WINDOW_MS;
+function isSameDate(tickerDate: Date, commenceDate: Date): boolean {
+    return tickerDate.getTime() === commenceDate.getTime();
+}
+
+function isPairDateValid(ticker: string, commenceTime: string): boolean {
+    const tickerDate = parseTickerDate(ticker);
+    if (!tickerDate) return false;
+    return isSameDate(tickerDate, getCommenceDate(commenceTime));
 }
 
 function filterKalshiByDate(kalshiEvents: KalshiEvent[], oddsEvents: OddsEventSummary[]): KalshiEvent[] {
@@ -74,9 +84,9 @@ function filterKalshiByDate(kalshiEvents: KalshiEvent[], oddsEvents: OddsEventSu
             return false;
         }
 
-        const withinWindow = commenceDates.some(cd => isWithinDateWindow(tickerDate, cd));
-        if (!withinWindow) Logger.log(`Filtered out — no matching date: "${kalshiEvent.title}" (${kalshiEvent.event_ticker})`);
-        return withinWindow;
+        const hasMatchingDate = commenceDates.some(cd => isSameDate(tickerDate, cd));
+        if (!hasMatchingDate) Logger.log(`Filtered out — no matching date: "${kalshiEvent.title}" (${kalshiEvent.event_ticker})`);
+        return hasMatchingDate;
     });
 }
 
@@ -99,7 +109,7 @@ function buildPrompt(kalshiEvents: KalshiEvent[], oddsEvents: OddsEventSummary[]
     return `## Kalshi Events\n${kalshiToon}\n\n## Odds API Events\n${oddsToon}`;
 }
 
-async function callHaiku(prompt: string): Promise<z.infer<typeof MATCH_SCHEMA>['matches']> {
+async function callSonnet(prompt: string): Promise<z.infer<typeof MATCH_SCHEMA>['matches']> {
     const response = await ClaudeClient.messages.parse({
         model: MODEL,
         max_tokens: MAX_TOKENS,
@@ -109,7 +119,7 @@ async function callHaiku(prompt: string): Promise<z.infer<typeof MATCH_SCHEMA>['
     });
 
     const { input_tokens, output_tokens } = response.usage;
-    Logger.log(`Haiku usage — input: ${input_tokens}, output: ${output_tokens}, total: ${input_tokens + output_tokens}`);
+    Logger.log(`Sonnet usage — input: ${input_tokens}, output: ${output_tokens}, total: ${input_tokens + output_tokens}`);
 
     return response.parsed_output!.matches;
 }
@@ -139,6 +149,7 @@ function buildMatchResult(
         }
 
         matched.push({ kalshiEvent, oddsEvent });
+        Logger.log(`Matched — "${kalshiEvent.title}" ↔ "${oddsEvent.away_team} at ${oddsEvent.home_team}"`);
         matchedKalshiTickers.add(event_ticker);
         matchedOddsIds.add(id);
     }
@@ -243,14 +254,20 @@ async function matchEvents(kalshiEvents: KalshiEvent[], oddsEvents: OddsEventSum
         return { matched: cachedPairs, unmatched };
     }
 
-    Logger.log(`Sending ${uncached.length} unmatched events to Haiku`);
+    Logger.log(`Sending ${uncached.length} unmatched events to Sonnet`);
     const prompt = buildPrompt(uncached, oddsEvents);
-    const haikuMatches = await callHaiku(prompt);
-    const haikuResult = buildMatchResult(haikuMatches, kalshiEvents, oddsEvents);
+    const sonnetMatches = await callSonnet(prompt);
+    const sonnetResult = buildMatchResult(sonnetMatches, kalshiEvents, oddsEvents);
 
-    await insertNewMatches(haikuResult.matched);
+    const dateValidatedPairs = sonnetResult.matched.filter(pair => {
+        const valid = isPairDateValid(pair.kalshiEvent.event_ticker, pair.oddsEvent.commence_time);
+        if (!valid) Logger.log(`Date mismatch rejected — "${pair.kalshiEvent.title}" (${pair.kalshiEvent.event_ticker}) ↔ "${pair.oddsEvent.away_team} at ${pair.oddsEvent.home_team}" (${pair.oddsEvent.commence_time})`);
+        return valid;
+    });
 
-    const allMatched = [...cachedPairs, ...haikuResult.matched];
+    await insertNewMatches(dateValidatedPairs);
+
+    const allMatched = [...cachedPairs, ...dateValidatedPairs];
     const allMatchedTickers = new Set(allMatched.map(p => p.kalshiEvent.event_ticker));
     const unmatched = kalshiEvents.filter(e => !allMatchedTickers.has(e.event_ticker));
 

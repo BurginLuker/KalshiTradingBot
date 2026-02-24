@@ -37,10 +37,14 @@ class TheOddsApi {
     }
 
     private async upsertEvents(events: OddsEventSummary[]) {
-        await SupabaseClient
+        const { data, error } = await SupabaseClient
             .from(this.EVENTS_TABLE)
-            .upsert(events);
-        Logger.log(`Inserted ${events.length} events into Supabase`);
+            .upsert(events)
+            .select();
+
+        if (error) throw new Error(`Failed to upsert events: ${error.message}`);
+
+        Logger.log(`Upserted ${data?.length ?? 0} events into Supabase`);
     }
 
     private hasNotStarted(event: OddsEventSummary): boolean {

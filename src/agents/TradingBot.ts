@@ -7,6 +7,7 @@ import AuditLogger from '../services/AuditLogger';
 import { computeKellySizing } from '../utils/positions';
 import SupabaseClient from '../clients/SupabaseClient';
 import Logger from '../utils/Logger';
+import { SPORT_CONFIG } from '../utils/sportConfig';
 import type { EventPair, KalshiEvent, KalshiEventMarketData, OddsEvent, OddsEventSummary } from '../types';
 
 interface TrackedOpportunity {
@@ -23,6 +24,7 @@ export class TradingBot {
 
     private MIN_BALANCE = 10;
     private SPORT: string;
+    private ODDS_API_SPORT_KEY: string;
     private LOOP_DELAY_MS = 100;
     private IS_DRY_RUN = process.env.DRY_RUN === 'true';
     private CACHE_WINDOW_MS = 12 * 60 * 60 * 1000;
@@ -33,6 +35,7 @@ export class TradingBot {
 
     constructor(sport: string) {
         this.SPORT = sport;
+        this.ODDS_API_SPORT_KEY = SPORT_CONFIG[sport].oddsApiKey;
         this.oddsApi = new TheOddsApi(sport);
         this.kalshiSportsEvents = new KalshiSportsEvents(sport);
     }
@@ -46,35 +49,44 @@ export class TradingBot {
         }
     }
 
+    private async startAuditRun(balance: number, positions: number): Promise<void> {
+        if (this.IS_DRY_RUN) {
+            Logger.log('=== DRY RUN — no orders will be placed, no data will be logged ===');
+            return;
+        }
+
+        await AuditLogger.startRun(this.SPORT, balance);
+        await AuditLogger.logAccountSnapshot(balance, positions, 'run_start');
+    }
+
     private async execute(): Promise<void> {
         const { accountBalance: initialBalance, activePositions } = await KalshiAccount.getAccountBalance();
         Logger.log(`Account balance: $${initialBalance}`);
 
-        if (this.IS_DRY_RUN) {
-            Logger.log('=== DRY RUN — no orders will be placed, no data will be logged ===');
-        } else {
-            await AuditLogger.startRun(this.SPORT, initialBalance);
-        }
-
-        await AuditLogger.logAccountSnapshot(initialBalance, activePositions, 'run_start');
-
+        // I dont want to run the account to zero or risk overdrawing on kalshi, idk what happens
         if (initialBalance < this.MIN_BALANCE) {
             Logger.log(`Balance below $${this.MIN_BALANCE} minimum — stopping.`);
-            await AuditLogger.completeRun({ matched: 0, opportunities: 0, executed: 0, skipped: 0 });
             return;
         }
 
+        // Get the held event tickers to avoid double dipping in markets if the edge is found twice
+        // NOTE: Logic could be written to resize positions
+        const heldEventTickers: Set<string> = await this.getHeldEventTickers();
+       
+       // Get the odds api events matched with the kalshi event for analysis
         const matched = await this.getMatchedEvents();
+
+        console.log(matched)
 
         if (matched.length === 0) {
             Logger.log('No cached matches found — run discovery first (npm run discover).');
-            await AuditLogger.completeRun({ matched: 0, opportunities: 0, executed: 0, skipped: 0 });
             return;
         }
 
-        Logger.log(`Matched ${matched.length} events.`);
+        await this.startAuditRun(initialBalance, activePositions);
 
-        const { tracked, skipped } = await this.collectOpportunities(matched);
+        // Returns edge oppurtunities
+        const { tracked, skipped } = await this.collectOpportunities(matched,heldEventTickers);
 
         if (tracked.length === 0) {
             Logger.log('No qualifying opportunities found.');
@@ -82,9 +94,10 @@ export class TradingBot {
             return;
         }
 
-        const label = tracked.length === 1 ? 'opportunity' : 'opportunities';
-        Logger.log(`Found ${tracked.length} qualifying ${label}.`);
+        Logger.log(`Found ${tracked.length} qualifying oppurtunities`);
 
+        // Place the orders on Kalshi, NOTE: Probably would be smart to refactor this
+        // Placing the orders at time of edge finding would be smarter, in case the market changes by the time we reach this code
         const executed = await this.executeOpportunities(tracked);
 
         const { accountBalance: finalBalance, activePositions: finalPositions } = await KalshiAccount.getAccountBalance();
@@ -107,7 +120,8 @@ export class TradingBot {
             `)
             .gte('events.commence_time', now.toISOString())
             .lte('events.commence_time', windowEnd.toISOString())
-            .eq('events.sport_key', this.SPORT);
+            .eq('events.sport_key', this.ODDS_API_SPORT_KEY);
+
 
         if (error) {
             throw new Error(`Failed to fetch cached matches: ${error.message}`);
@@ -118,6 +132,20 @@ export class TradingBot {
         }
 
         return data.map((row: any) => this.toEventPair(row));
+    }
+
+    private async getHeldEventTickers(): Promise<Set<string>> {
+        const {event_positions} = await KalshiAccount.getPositions();
+
+        const tickers = new Set<string>();
+        for (const position of event_positions) {
+            if (position.event_ticker) {
+                tickers.add(position.event_ticker);
+            }
+        }
+
+        Logger.log(`Holding positions in ${tickers.size} events.`);
+        return tickers;
     }
 
     private toEventPair(row: any): EventPair {
@@ -148,11 +176,24 @@ export class TradingBot {
         return { kalshiEvent, oddsEvent };
     }
 
-    private async collectOpportunities(matched: EventPair[]): Promise<CollectResult> {
+    private async collectOpportunities(matched: EventPair[],heldEventTickers:Set<string>): Promise<CollectResult> {
         const tracked: TrackedOpportunity[] = [];
         let skipped = 0;
 
         for (const { kalshiEvent, oddsEvent } of matched) {
+            
+            // For events that we have already traded, there is no use in burning api calls
+            // There is a caveat to this, if the edge has now spawned on the other side of the event we would not trade the event
+            // But that is more logic, we would have to check we werent summing proabilities to over 100% if we were gonna risk playing both sides of the market
+            if(heldEventTickers.has(kalshiEvent.event_ticker)){
+                Logger.log(`Skipping ticker ${kalshiEvent.event_ticker} as a position is already held`)
+
+                // TODO: We could check positions for profit at some point? Unless that is bad idea bc it defeats kelly position sizing strategy
+                continue;
+            }
+
+
+            Logger.log(`Analyzing — "${kalshiEvent.title}" ↔ "${oddsEvent.away_team} at ${oddsEvent.home_team}"`);
             await this.sleep(this.LOOP_DELAY_MS);
 
             try {
