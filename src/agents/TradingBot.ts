@@ -9,10 +9,13 @@ import SupabaseClient from '../clients/SupabaseClient';
 import Logger from '../utils/Logger';
 import { SPORT_CONFIG } from '../utils/sportConfig';
 import type { EventPair, KalshiEvent, KalshiEventMarketData, OddsEvent, OddsEventSummary } from '../types';
+import OddsSnapshotBot from './PositionMonitorBot';
+import type { SnapshotContext } from './PositionMonitorBot';
 
 interface TrackedOpportunity {
     opportunity: EdgeOpportunity;
     opportunityId: string | null;
+    eventPair: EventPair;
 }
 
 interface AnalyzeResult {
@@ -33,6 +36,7 @@ export class TradingBot {
 
     private oddsApi: TheOddsApi;
     private kalshiSportsEvents: KalshiSportsEvents;
+    private auditLogger = new AuditLogger();
 
     constructor(sport: string) {
         this.SPORT = sport;
@@ -46,7 +50,8 @@ export class TradingBot {
             await this.execute();
         } catch (error) {
             Logger.log(`Run failed: ${error}`);
-            await AuditLogger.failRun(String(error));
+            console.error(error?.stack)
+            await this.auditLogger.failRun(String(error));
         }
     }
 
@@ -56,8 +61,8 @@ export class TradingBot {
             return;
         }
 
-        await AuditLogger.startRun(this.SPORT, balance);
-        await AuditLogger.logAccountSnapshot(balance, positions, 'run_start');
+        await this.auditLogger.startRun(this.SPORT, balance);
+        await this.auditLogger.logAccountSnapshot(balance, positions, 'run_start');
     }
 
     private async execute(): Promise<void> {
@@ -85,8 +90,8 @@ export class TradingBot {
         const { opportunities, executed, skipped } = await this.analyzeAndExecute(matched, heldEventTickers);
 
         const { accountBalance: finalBalance, activePositions: finalPositions } = await KalshiAccount.getAccountBalance();
-        await AuditLogger.logAccountSnapshot(finalBalance, finalPositions, 'run_end');
-        await AuditLogger.completeRun({ matched: matched.length, opportunities, executed, skipped });
+        await this.auditLogger.logAccountSnapshot(finalBalance, finalPositions, 'run_end');
+        await this.auditLogger.completeRun({ matched: matched.length, opportunities, executed, skipped });
     }
 
     private async getMatchedEvents(): Promise<EventPair[]> {
@@ -188,25 +193,25 @@ export class TradingBot {
                     throw new Error(JSON.stringify(oddsData) + '' + JSON.stringify(oddsEvent));
                 }
 
-                const matchId = await AuditLogger.logEventMatch(kalshiEvent, oddsEvent);
+                const matchId = await this.auditLogger.logEventMatch(kalshiEvent, oddsEvent);
 
                 const eventOpportunities = EventAnalysis.analyzeEvent(kalshiMarketData, oddsData);
 
                 for (const opportunity of eventOpportunities) {
                     const opportunityId = matchId
-                        ? await AuditLogger.logEdgeOpportunity(matchId, opportunity)
+                        ? await this.auditLogger.logEdgeOpportunity(matchId, opportunity)
                         : null;
 
                     opportunities += 1;
 
-                    const placed = await this.executeOpportunity({ opportunity, opportunityId });
+                    const placed = await this.executeOpportunity({ opportunity, opportunityId, eventPair: { kalshiEvent, oddsEvent } });
                     if (placed) {
                         executed += 1;
                     }
                 }
             } catch (error) {
                 Logger.log(`Skipping event — analysis failed: ${error}`);
-                await AuditLogger.logSkippedEvent(
+                await this.auditLogger.logSkippedEvent(
                     kalshiEvent.event_ticker,
                     oddsEvent?.id ?? null,
                     String(error),
@@ -230,10 +235,10 @@ export class TradingBot {
             return false;
         }
 
-        AuditLogger.logAccountSnapshot(accountBalance, activePositions, 'pre_order');
+        this.auditLogger.logAccountSnapshot(accountBalance, activePositions, 'pre_order');
 
         Logger.log(opportunity.reason);
-        await this.placeOrderForOpportunity(opportunity, opportunityId, accountBalance);
+        await this.placeOrderForOpportunity(opportunity, opportunityId, accountBalance, tracked.eventPair);
 
         return true;
     }
@@ -242,10 +247,16 @@ export class TradingBot {
         opportunity: EdgeOpportunity,
         opportunityId: string | null,
         bankroll: number,
+        eventPair: EventPair,
     ): Promise<void> {
         const { ticker, kalshiYesAskPrice, fairProbability, yesSide } = opportunity.edge_event;
 
         const sizing = computeKellySizing(fairProbability, kalshiYesAskPrice, bankroll);
+
+        if (sizing.contractCount === 0) {
+            Logger.log('Kelly sizing too small for 1 contract — skipping');
+            return;
+        }
 
         this.logOrderDetails(yesSide, sizing, kalshiYesAskPrice);
 
@@ -257,10 +268,22 @@ export class TradingBot {
         const result = await KalshiAccount.placeOrder(ticker, kalshiYesAskPrice, sizing.contractCount);
         Logger.log(`Order result: ${JSON.stringify(result)}`);
 
+        // Schedule later data checks to monitor trends
+        OddsSnapshotBot.scheduleChecks({
+            ticker,
+            eventTicker: eventPair.kalshiEvent.event_ticker,
+            entryPriceCents: Math.round(kalshiYesAskPrice * 100),
+            entryFairProbability: fairProbability,
+            sport: this.SPORT,
+            kalshiEvent: eventPair.kalshiEvent,
+            oddsEvent: eventPair.oddsEvent,
+        });
+
         if (!opportunityId) return;
 
-        await AuditLogger.markOpportunityPlaced(opportunityId);
-        await AuditLogger.logOrder({
+        // Log associatated order data
+        await this.auditLogger.markOpportunityPlaced(opportunityId);
+        await this.auditLogger.logOrder({
             opportunityId,
             ticker,
             yesSide,

@@ -190,4 +190,4 @@ class AuditLogger {
 
 }
 
-export default new AuditLogger();
+export default AuditLogger;

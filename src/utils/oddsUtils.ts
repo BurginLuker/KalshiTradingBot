@@ -104,8 +104,13 @@ function computeBookmakerFairProbs(outcomes: OddsOutcome[]): Record<string, numb
     return Object.fromEntries(outcomes.map((o, i) => [o.name, fairProbs[i]]));
 }
 
-// Matches a Kalshi short team name (e.g. "Texas Tech") against the full
-// Odds API team names (e.g. "Texas Tech Red Raiders") for the same game.
+// Kalshi and The Odds API use different naming conventions for the same team.
+// Kalshi markets use short names in yes_sub_title (e.g. "Texas Tech", "LA Lakers"),
+// while The Odds API uses full official names (e.g. "Texas Tech Red Raiders", "Los Angeles Lakers").
+// These names will never match exactly, so we normalize both sides and check whether
+// one contains the other as a substring — this handles both directions because
+// sometimes Kalshi is shorter (common case) and occasionally the full name is
+// a subset of the Kalshi label.
 function matchOddsTeamName(kalshiShortName: string, oddsNames: string[]): string | null {
     const shortNorm = normalizeTeamName(kalshiShortName);
     return oddsNames.find(name => {
@@ -114,6 +119,9 @@ function matchOddsTeamName(kalshiShortName: string, oddsNames: string[]): string
     }) ?? null;
 }
 
+// Strips punctuation and collapses whitespace so that strings like "St. Mary's"
+// and "St Marys" compare equal, and hyphenated names like "Winston-Salem" don't
+// accidentally break substring matching.
 function normalizeTeamName(name: string): string {
     return name
         .toLowerCase()

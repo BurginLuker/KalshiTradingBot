@@ -4,7 +4,8 @@
       "WebFetch(domain:docs.kalshi.com)",
       "WebSearch",
       "Bash(npx tsc:*)",
-      "mcp__supabase__list_migrations"
+      "mcp__supabase__list_migrations",
+      "mcp__supabase__list_tables"
     ]
   },
   "enableAllProjectMcpServers": true,

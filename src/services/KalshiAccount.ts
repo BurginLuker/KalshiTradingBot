@@ -12,6 +12,7 @@ class KalshiAccount {
     private CENTS_PER_DOLLAR = 100;
     private YES_SIDE = 'yes';
     private BUY_ACTION = 'buy';
+    private SELL_ACTION = 'sell';
     private LIMIT_ORDER_TYPE = 'limit';
     private RESTING_STATUS = 'resting';
 
@@ -142,6 +143,40 @@ class KalshiAccount {
             action: this.BUY_ACTION,
             type: this.LIMIT_ORDER_TYPE,
             yes_price: yesPriceCents,
+            count: contractCount,
+        };
+    }
+
+    async sellPosition(ticker: string, yesBidPriceDecimal: number, contractCount: number): Promise<any> {
+        const method = 'POST';
+        const timestamp = this.getCurrentTimestamp();
+        const signature = this.createSignature(timestamp, method, this.ORDER_PATH);
+
+        const url = `https://${this.baseUrl}${this.ORDER_PATH}`;
+        const body = this.buildSellBody(ticker, yesBidPriceDecimal, contractCount);
+
+        const response = await fetch(url, {
+            method,
+            headers: {
+                'KALSHI-ACCESS-KEY': this.apiKey,
+                'KALSHI-ACCESS-SIGNATURE': signature,
+                'KALSHI-ACCESS-TIMESTAMP': timestamp,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body),
+        });
+
+        return response.json();
+    }
+
+    private buildSellBody(ticker: string, yesBidPriceDecimal: number, contractCount: number) {
+        const yesBidPriceCents = Math.round(yesBidPriceDecimal * this.CENTS_PER_DOLLAR);
+        return {
+            ticker,
+            side: this.YES_SIDE,
+            action: this.SELL_ACTION,
+            type: this.LIMIT_ORDER_TYPE,
+            yes_price: yesBidPriceCents,
             count: contractCount,
         };
     }

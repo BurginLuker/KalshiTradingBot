@@ -47,10 +47,6 @@ class TheOddsApi {
         Logger.log(`Upserted ${data?.length ?? 0} events into Supabase`);
     }
 
-    private hasNotStarted(event: OddsEventSummary): boolean {
-        return new Date(event.commence_time) > new Date();
-    }
-
     private sortByCommenceTime(events: OddsEventSummary[]): OddsEventSummary[] {
         return [...events].sort((a, b) =>
             new Date(a.commence_time).getTime() - new Date(b.commence_time).getTime()
@@ -60,17 +56,14 @@ class TheOddsApi {
     async getTodaysEvents(): Promise<OddsEventSummary[]> {
         const cached = await this.getCachedTodaysEvents();
         if (cached && cached.length > 0) {
-            const upcoming = cached.filter((event) => this.hasNotStarted(event));
-            Logger.log(`Cache hit — returning ${upcoming.length} upcoming events from Supabase`);
-            return this.sortByCommenceTime(upcoming);
+            Logger.log(`Cache hit — returning ${cached.length} events from Supabase`);
+            return this.sortByCommenceTime(cached);
         }
 
         const events = await this.fetchEventsFromApi();
         await this.upsertEvents(events);
 
-        const upcoming = events.filter((event: OddsEventSummary) => this.hasNotStarted(event));
-
-        return this.sortByCommenceTime(upcoming);
+        return this.sortByCommenceTime(events);
     }
 
     async getEventOdds(event: OddsEventSummary): Promise<OddsEvent> {

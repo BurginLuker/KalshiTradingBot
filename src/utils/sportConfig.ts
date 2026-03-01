@@ -8,6 +8,10 @@ export const SPORT_CONFIG: Record<string, SportConfig> = {
         oddsApiKey: 'basketball_ncaab',
         kalshiSeries: 'KXNCAAMBGAME',
     },
+    'womens_college_basketball':{
+        oddsApiKey:'basketball_wncaab',
+        kalshiSeries:'KXNCAAWBGAME',
+    },
     'mens_pro_basketball': {
         oddsApiKey: 'basketball_nba',
         kalshiSeries: 'KXNBAGAME',

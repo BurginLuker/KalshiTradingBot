@@ -7,9 +7,10 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "trade": "ts-node src/index.ts",
-    "discover": "DISCOVER=true ts-node src/index.ts",
-    "dry-run": "DRY_RUN=true ts-node src/index.ts",
+    "trade": "npm run build && node dist/index.js",
+    "discover": "npm run build && DISCOVER=true node dist/index.js",
+    "dry-run": "npm run build && DRY_RUN=true node dist/index.js",
+    "get-positions": "ts-node src/scripts/getPositions.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

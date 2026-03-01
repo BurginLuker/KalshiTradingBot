@@ -123,3 +123,10 @@ async getTodaysEvents() {
 ```
 
 The cache check, the API fetch, the filter-and-upsert, and the return are each a distinct step. A blank line between them makes the function scannable at a glance.
+
+## Workflow
+
+- **Main context window** is for architecture, planning, and design discussion. Do not implement code directly in the main context.
+- **Delegate all straightforward implementation tasks** (bug fixes, small features, refactors with clear instructions) to the implementation agent.
+- **Give the implementation agent highly descriptive prompts.** The agent has no conversation history — it only knows what you tell it. Always include: exact file paths, the specific problem or change, the logic to implement, and any conventions to follow. Never assume the agent has context from the main conversation.
+- Reserve the main context for reviewing agent output, making architectural decisions, and coordinating multi-step work.
