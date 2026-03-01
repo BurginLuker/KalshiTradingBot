@@ -27,7 +27,7 @@ class EventDiscovery {
         Logger.log(`Starting event discovery for ${this.sport}`);
 
         const [oddsEvents, kalshiEvents] = await Promise.all([
-            this.oddsApi.getTodaysEvents(),
+            this.oddsApi.getUpcomingEvents(),
             this.kalshiSportsEvents.getSportsEvents(),
         ]);
 

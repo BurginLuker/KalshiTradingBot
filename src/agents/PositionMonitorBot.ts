@@ -20,9 +20,12 @@ class OddsSnapshotBot {
     private SNAPSHOTS_TABLE = 'odds_snapshots';
     private CENTS_PER_DOLLAR = 100;
     private CHECK_INTERVALS = [
-        { label: '5m',  delayMs: 5  * 60 * 1000 },
+        { label: '5m',  delayMs:  5 * 60 * 1000 },
         { label: '30m', delayMs: 30 * 60 * 1000 },
         { label: '1hr', delayMs: 60 * 60 * 1000 },
+        { label: '6hr',  delayMs:  6 * 60 * 60 * 1000 },
+        { label: '12hr', delayMs: 12 * 60 * 60 * 1000 },
+        { label: '24hr', delayMs: 24 * 60 * 60 * 1000 },
     ];
 
     scheduleChecks(context: SnapshotContext): void {

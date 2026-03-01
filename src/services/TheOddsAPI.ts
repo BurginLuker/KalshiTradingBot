@@ -11,7 +11,7 @@ class TheOddsApi {
     private sport;
     private regions = 'us';
 
-    private CACHE_WINDOW_MS = 12 * 60 * 60 * 1000;
+    private CACHE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
     constructor(sport: string) {
         this.sport = SPORT_CONFIG[sport].oddsApiKey;
@@ -23,7 +23,7 @@ class TheOddsApi {
         return await result.json() as OddsEventSummary[];
     }
 
-    private async getCachedTodaysEvents() {
+    private async getCachedUpcomingEvents() {
         const now = new Date();
         const windowEnd = new Date(now.getTime() + this.CACHE_WINDOW_MS);
 
@@ -53,8 +53,8 @@ class TheOddsApi {
         );
     }
 
-    async getTodaysEvents(): Promise<OddsEventSummary[]> {
-        const cached = await this.getCachedTodaysEvents();
+    async getUpcomingEvents(): Promise<OddsEventSummary[]> {
+        const cached = await this.getCachedUpcomingEvents();
         if (cached && cached.length > 0) {
             Logger.log(`Cache hit — returning ${cached.length} events from Supabase`);
             return this.sortByCommenceTime(cached);

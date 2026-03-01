@@ -85,7 +85,7 @@ function filterKalshiByDate(kalshiEvents: KalshiEvent[], oddsEvents: OddsEventSu
         }
 
         const hasMatchingDate = commenceDates.some(cd => isSameDate(tickerDate, cd));
-        if (!hasMatchingDate) Logger.log(`Filtered out — no matching date: "${kalshiEvent.title}" (${kalshiEvent.event_ticker})`);
+        if (!hasMatchingDate) Logger.log(`Skipped — game date not covered by Odds API data: "${kalshiEvent.title}" (${kalshiEvent.event_ticker})`);
         return hasMatchingDate;
     });
 }
@@ -144,7 +144,7 @@ function buildMatchResult(
         const oddsEvent = oddsMap.get(id);
 
         if (!kalshiEvent || !oddsEvent) {
-            Logger.log(`Skipping invalid match — ticker: ${event_ticker}, odds id: ${id}`);
+            Logger.log(`Sonnet returned unknown ticker or odds ID — ticker: ${event_ticker}, odds id: ${id}`);
             continue;
         }
 
@@ -156,12 +156,12 @@ function buildMatchResult(
 
     const unmatched = kalshiEvents.filter(e => !matchedKalshiTickers.has(e.event_ticker));
     for (const e of unmatched) {
-        Logger.log(`Unmatched Kalshi event — "${e.title}" (ticker: ${e.event_ticker})`);
+        Logger.log(`Sonnet could not match Kalshi event — "${e.title}" (ticker: ${e.event_ticker})`);
     }
 
     const unmatchedOdds = oddsEvents.filter(e => !matchedOddsIds.has(e.id));
     for (const e of unmatchedOdds) {
-        Logger.log(`Unmatched Odds API event — "${e.away_team} at ${e.home_team}" (id: ${e.id})`);
+        Logger.log(`Sonnet could not match Odds API event — "${e.away_team} at ${e.home_team}" (id: ${e.id})`);
     }
 
     return { matched, unmatched };
@@ -254,7 +254,7 @@ async function matchEvents(kalshiEvents: KalshiEvent[], oddsEvents: OddsEventSum
         return { matched: cachedPairs, unmatched };
     }
 
-    Logger.log(`Sending ${uncached.length} unmatched events to Sonnet`);
+    Logger.log(`Sending ${uncached.length} uncached events to Sonnet`);
     const prompt = buildPrompt(uncached, oddsEvents);
     const sonnetMatches = await callSonnet(prompt);
     const sonnetResult = buildMatchResult(sonnetMatches, kalshiEvents, oddsEvents);

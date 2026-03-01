@@ -31,7 +31,7 @@ export class TradingBot {
     private ODDS_API_SPORT_KEY: string;
     private LOOP_DELAY_MS = 100;
     private IS_DRY_RUN = process.env.DRY_RUN === 'true';
-    private CACHE_WINDOW_MS = 12 * 60 * 60 * 1000;
+    private CACHE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
     private EVENT_MATCHES_TABLE = 'event_matches';
 
     private oddsApi: TheOddsApi;
