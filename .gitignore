@@ -3,4 +3,5 @@ dist/
 .env
 .DS_Store
 src/keys.ts
+*.pem
 
