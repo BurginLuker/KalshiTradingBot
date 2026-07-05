@@ -19,7 +19,6 @@ src/
 ├── clients/     # External service clients and configs
 ├── services/    # Domain-specific service wrappers
 ├── utils/       # Utility functions
-├── keys.ts      # API keys and env config
 └── index.ts     # Entry point
 ```
 
