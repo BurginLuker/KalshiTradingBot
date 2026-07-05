@@ -1,4 +1,4 @@
-import { DISCORD_WEBHOOK } from '../keys';
+import { DISCORD_WEBHOOK } from '../env';
 import Logger from '../utils/Logger';
 
 export interface TradeNotification {

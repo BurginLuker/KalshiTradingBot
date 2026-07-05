@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { KALSHI_API_KEY } from '../keys';
+import { KALSHI_API_KEY } from '../env';
 import type { AccountBalance } from '../types';
 
 class KalshiAccount {

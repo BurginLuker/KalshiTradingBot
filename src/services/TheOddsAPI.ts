@@ -1,4 +1,4 @@
-import { THE_ODDS_API_KEY } from "../keys";
+import { THE_ODDS_API_KEY } from '../env';
 import SupabaseClient from "../clients/SupabaseClient";
 import Logger from "../utils/Logger";
 import { SPORT_CONFIG } from "../utils/sportConfig";
