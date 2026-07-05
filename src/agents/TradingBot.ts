@@ -4,6 +4,8 @@ import EventAnalysis from '../services/EventAnalysis';
 import type { EdgeOpportunity } from '../services/EventAnalysis';
 import KalshiAccount from '../services/KalshiAccount';
 import AuditLogger from '../services/AuditLogger';
+import DiscordNotifier from '../services/DiscordNotifier';
+import type { TradeNotification } from '../services/DiscordNotifier';
 import { computeKellySizing } from '../utils/positions';
 import SupabaseClient from '../clients/SupabaseClient';
 import Logger from '../utils/Logger';
@@ -16,6 +18,7 @@ interface TrackedOpportunity {
     opportunity: EdgeOpportunity;
     opportunityId: string | null;
     eventPair: EventPair;
+    oddsData: OddsEvent;
 }
 
 interface AnalyzeResult {
@@ -204,7 +207,7 @@ export class TradingBot {
 
                     opportunities += 1;
 
-                    const placed = await this.executeOpportunity({ opportunity, opportunityId, eventPair: { kalshiEvent, oddsEvent } });
+                    const placed = await this.executeOpportunity({ opportunity, opportunityId, eventPair: { kalshiEvent, oddsEvent }, oddsData });
                     if (placed) {
                         executed += 1;
                     }
@@ -238,7 +241,7 @@ export class TradingBot {
         this.auditLogger.logAccountSnapshot(accountBalance, activePositions, 'pre_order');
 
         Logger.log(opportunity.reason);
-        await this.placeOrderForOpportunity(opportunity, opportunityId, accountBalance, tracked.eventPair);
+        await this.placeOrderForOpportunity(opportunity, opportunityId, accountBalance, tracked.eventPair, tracked.oddsData);
 
         return true;
     }
@@ -248,6 +251,7 @@ export class TradingBot {
         opportunityId: string | null,
         bankroll: number,
         eventPair: EventPair,
+        oddsData: OddsEvent,
     ): Promise<void> {
         const { ticker, kalshiYesAskPrice, fairProbability, yesSide } = opportunity.edge_event;
 
@@ -258,6 +262,7 @@ export class TradingBot {
             return;
         }
 
+        this.logOddsFreshness(oddsData);
         this.logOrderDetails(yesSide, sizing, kalshiYesAskPrice);
 
         if (this.IS_DRY_RUN) {
@@ -267,6 +272,24 @@ export class TradingBot {
 
         const result = await KalshiAccount.placeOrder(ticker, kalshiYesAskPrice, sizing.contractCount);
         Logger.log(`Order result: ${JSON.stringify(result)}`);
+
+        const freshnessList = this.extractBookmakerFreshness(oddsData, Date.now())
+            .sort((a, b) => a.ageMs - b.ageMs)
+            .map(f => ({ title: f.title, age: this.formatAge(f.ageMs) }));
+
+        DiscordNotifier.sendTradeNotification({
+            eventTitle: eventPair.kalshiEvent.title,
+            ticker,
+            yesSide,
+            priceCents: Math.round(kalshiYesAskPrice * 100),
+            contractCount: sizing.contractCount,
+            dollarAmount: sizing.dollarAmount,
+            fairProbability,
+            edgePp: opportunity.edge_event.edge * 100,
+            kellyFraction: sizing.kellyFraction,
+            bankroll,
+            oddsFreshness: freshnessList,
+        });
 
         // Schedule later data checks to monitor trends
         OddsSnapshotBot.scheduleChecks({
@@ -298,6 +321,44 @@ export class TradingBot {
 
     private sleep(ms: number): Promise<void> {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    private logOddsFreshness(oddsData: OddsEvent): void {
+        const now = Date.now();
+        const freshnessList = this.extractBookmakerFreshness(oddsData, now);
+
+        if (freshnessList.length === 0) return;
+
+        const sorted = freshnessList.sort((a, b) => a.ageMs - b.ageMs);
+        const freshest = sorted[0];
+        const stalest = sorted[sorted.length - 1];
+
+        Logger.log(`Freshest odds: ${freshest.title}, last refresh ${this.formatAge(freshest.ageMs)} ago`);
+        Logger.log(`Stalest odds: ${stalest.title}, last refresh ${this.formatAge(stalest.ageMs)} ago`);
+    }
+
+    private extractBookmakerFreshness(oddsData: OddsEvent, now: number): { title: string; ageMs: number }[] {
+        const results: { title: string; ageMs: number }[] = [];
+
+        for (const bookmaker of oddsData.bookmakers) {
+            const h2hMarket = bookmaker.markets.find(m => m.key === 'h2h');
+            if (!h2hMarket) continue;
+
+            const updatedAt = new Date(h2hMarket.last_update).getTime();
+            results.push({ title: bookmaker.title, ageMs: now - updatedAt });
+        }
+
+        return results;
+    }
+
+    private formatAge(ms: number): string {
+        const totalSeconds = Math.floor(ms / 1000);
+
+        if (totalSeconds < 60) return `${totalSeconds} seconds`;
+
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${minutes}m ${seconds}s`;
     }
 
     private logOrderDetails(yesSide: string, sizing: ReturnType<typeof computeKellySizing>, askPrice: number): void {
